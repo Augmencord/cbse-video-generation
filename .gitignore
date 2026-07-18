@@ -1,0 +1,21 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local environment variables
+.env
+
+# Output media and temp directories
+output/
+media/
+temp/
+test_output.mp4
+
+# IDE / Editor files
+.vscode/
+.idea/
