@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import re
@@ -112,24 +112,8 @@ def read_root():
         "docs": "/docs"
     }
 
-@app.post("/api/storyboard")
-def create_storyboard(request: StoryboardRequest):
-    try:
-        storyboard = generate_storyboard(topic=request.topic, model_name=request.model)
-        return storyboard
-    except ValueError as val_err:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Storyboard constraints validation failed: {str(val_err)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate storyboard: {str(e)}"
-        )
-
-@app.post("/api/render")
-def render_video(storyboard: Storyboard):
+def trigger_video_render(storyboard: Storyboard):
+    """Compiles the storyboard into a video and creates the JSON sidecar metadata."""
     try:
         # Generate safe filename from topic
         safe_topic = re.sub(r'[^a-zA-Z0-9_\-]', '_', storyboard.topic.lower())
@@ -138,7 +122,7 @@ def render_video(storyboard: Storyboard):
         output_filename = f"storyboard_{safe_topic}.mp4"
         output_path = os.path.join(OUTPUT_DIR, output_filename)
         
-        print(f"[API] Starting render for topic '{storyboard.topic}' to: {output_path}")
+        print(f"[Renderer] Starting render for topic '{storyboard.topic}' to: {output_path}")
         render_storyboard_to_video(
             storyboard_data=storyboard.model_dump(),
             output_path=output_path,
@@ -157,8 +141,34 @@ def render_video(storyboard: Storyboard):
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta_data, f, indent=2)
             
-        print(f"[API] Wrote sidecar metadata to: {meta_path}")
-        
+        print(f"[Renderer] Wrote sidecar metadata to: {meta_path}")
+        return output_path, output_filename
+    except Exception as e:
+        print(f"[Renderer] Error rendering video for '{storyboard.topic}': {e}")
+        raise e
+
+@app.post("/api/storyboard")
+def create_storyboard(request: StoryboardRequest, background_tasks: BackgroundTasks):
+    try:
+        storyboard = generate_storyboard(topic=request.topic, model_name=request.model)
+        # Queue the video rendering to run in the background
+        background_tasks.add_task(trigger_video_render, storyboard)
+        return storyboard
+    except ValueError as val_err:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Storyboard constraints validation failed: {str(val_err)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate storyboard: {str(e)}"
+        )
+
+@app.post("/api/render")
+def render_video(storyboard: Storyboard):
+    try:
+        output_path, output_filename = trigger_video_render(storyboard)
         return {
             "status": "success",
             "message": "Video successfully rendered and queued for organization",
